@@ -235,13 +235,16 @@ _WIZ_JS = r"""
 
 _CONV_LIST_JS = r"""
 (function(){
+    // 注：侧边栏折叠态下 .innerText 返回空（CSS 隐藏），但 .textContent 能拿
+    // 到 DOM 中的真实文本。优先查 .conversation-title 子元素。
     const links=[], seen=new Set();
-    document.querySelectorAll('a[href*="/app/"]').forEach(a=>{
+    document.querySelectorAll('a[data-test-id="conversation"], a[href*="/app/"]').forEach(a=>{
         const m=a.href.match(/\/app\/([a-zA-Z0-9_-]{8,})/);
         if(!m||seen.has(m[1])) return;
         seen.add(m[1]);
-        const t=(a.innerText||a.title||a.getAttribute('aria-label')||'')
-                  .trim().replace(/^\n+|\n+$/g,'').split('\n')[0].trim();
+        const titleEl=a.querySelector('.conversation-title');
+        let t = titleEl ? titleEl.textContent : (a.textContent || a.getAttribute('aria-label') || a.title || '');
+        t = t.replace(/\s+/g, ' ').trim();
         links.push({id:m[1], url:'https://gemini.google.com/app/'+m[1], title:t||m[1]});
     });
     return links;
