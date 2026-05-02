@@ -541,8 +541,10 @@ def parse_gemini_turns(payload: list) -> list[dict]:
     if not exchanges_array:
         return []
 
+    # Gemini batchexecute API 返回的 exchanges 在单页内是 newest-first，
+    # 我们要按时间顺序输出（oldest-first），所以反向遍历。
     turns = []
-    for exchange in exchanges_array:
+    for exchange in reversed(exchanges_array):
         if not isinstance(exchange, list) or len(exchange) < 3:
             continue
 
