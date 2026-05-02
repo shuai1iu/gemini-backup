@@ -43,8 +43,9 @@ from Crypto.Protocol.KDF import PBKDF2
 # ─── 配置 ─────────────────────────────────────────────────────────────────────
 CHROME_PORT   = 9222
 COOKIES_DB    = Path.home() / "Library/Application Support/Google/Chrome/Default/Cookies"
-SITE_DIR      = Path.home() / "Documents" / "gemini_local_site"
-DEBUG_DIR     = Path.home() / "Documents" / "gemini_api_debug"
+# 注意：避开 iCloud Drive 同步目录 ~/Documents（批量写会触发 Errno 60 超时）
+SITE_DIR      = Path.home() / "gemini_local_site"
+DEBUG_DIR     = Path.home() / "gemini_api_debug"
 # 要抓取的对话数：0 = 全部
 CONV_LIMIT    = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 # ─────────────────────────────────────────────────────────────────────────────
@@ -861,6 +862,17 @@ main{max-width:860px;margin:0 auto;padding:28px 20px}
 ::-webkit-scrollbar-track{background:var(--bg)}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 ::-webkit-scrollbar-thumb:hover{background:var(--accent)}
+.export-bar{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 6px}
+.export-btn{
+  background:var(--surface);border:1px solid var(--border);
+  color:var(--text);font-family:inherit;font-size:13px;
+  padding:7px 14px;border-radius:8px;cursor:pointer;
+  transition:all .15s;
+}
+.export-btn:hover{border-color:var(--accent);color:var(--accent)}
+.export-btn.ok{border-color:#16a34a;color:#4ade80}
+.export-btn.warn{border-color:#dc2626;color:#f87171}
+.export-hint{font-size:12px;color:var(--dim);margin-top:6px}
 """
 
 _INDEX_TPL = """<!DOCTYPE html>
@@ -914,8 +926,88 @@ _CONV_TPL = """<!DOCTYPE html>
     <div>捕获 <strong>{date}</strong></div>
     <div><a href="{url}" target="_blank">在 Gemini 中打开 ↗</a></div>
   </div>
+  <div class="export-bar">
+    <button class="export-btn" onclick="exportCopy(event,'claude')">📋 复制（喂给 Claude/其他 AI）</button>
+    <button class="export-btn" onclick="exportCopy(event,'plain')">📋 仅 Markdown</button>
+    <button class="export-btn" onclick="exportDownload(event)">💾 下载 .md</button>
+  </div>
+  <div class="export-hint" id="exportHint">点击"复制"会自动加上"以下是我和 Gemini 的对话历史…"前缀，粘贴到 Claude 即可继承上下文。</div>
+  <script type="application/json" id="raw-data">{raw_json}</script>
   <div class="convo">{turns_html}</div>
-</main></body></html>"""
+</main>
+<script>
+(function(){{
+  var raw = JSON.parse(document.getElementById('raw-data').textContent);
+  var hint = document.getElementById('exportHint');
+  function buildMD(mode){{
+    var m = raw.meta || {{}};
+    var lines = [];
+    if (mode === 'claude') {{
+      lines.push("以下是我之前和 Google Gemini 的一段对话历史。请仔细阅读理解其中的上下文与脉络，之后我会继续基于这些内容向你提问，希望你能延续这一上下文回答我。");
+      lines.push("");
+      lines.push("---");
+      lines.push("");
+    }}
+    lines.push("# " + (m.title || ''));
+    lines.push("");
+    lines.push("> 来源：Gemini 对话 · " + (m.date || '') + " · 共 " + (raw.turns||[]).length + " 条消息  ");
+    if (m.url) lines.push("> " + m.url);
+    lines.push("");
+    lines.push("---");
+    lines.push("");
+    (raw.turns||[]).forEach(function(t){{
+      lines.push(t.role === 'user' ? '## 用户' : '## Gemini');
+      lines.push("");
+      lines.push((t.text||'').replace(/\\r\\n/g,'\\n'));
+      lines.push("");
+    }});
+    return lines.join('\\n');
+  }}
+  function flash(btn, txt, cls){{
+    var orig = btn.textContent;
+    btn.textContent = txt;
+    btn.classList.add(cls || 'ok');
+    setTimeout(function(){{
+      btn.textContent = orig;
+      btn.classList.remove(cls || 'ok');
+    }}, 2200);
+  }}
+  window.exportCopy = async function(ev, mode){{
+    var btn = ev.currentTarget;
+    var md  = buildMD(mode);
+    try {{
+      await navigator.clipboard.writeText(md);
+      flash(btn, '✓ 已复制 ' + md.length.toLocaleString() + ' 字符');
+      hint.textContent = '已复制到剪贴板（' + md.length.toLocaleString() + ' 字符）。粘贴到 Claude 对话框即可。';
+    }} catch (e) {{
+      // file:// 下 navigator.clipboard 可能受限，回退
+      try {{
+        var ta = document.createElement('textarea');
+        ta.value = md; ta.style.position='fixed'; ta.style.opacity='0';
+        document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); ta.remove();
+        flash(btn, '✓ 已复制（兼容模式）');
+      }} catch (e2) {{
+        flash(btn, '✗ 复制失败，请用下载', 'warn');
+      }}
+    }}
+  }};
+  window.exportDownload = function(ev){{
+    var btn = ev.currentTarget;
+    var md = buildMD('plain');
+    var safe = (raw.meta && (raw.meta.title || raw.meta.id) || 'gemini')
+                 .replace(/[\\\\/:*?"<>|\\n\\r]+/g, '_').slice(0, 80);
+    var blob = new Blob([md], {{type: 'text/markdown;charset=utf-8'}});
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = safe + '.md';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){{ URL.revokeObjectURL(a.href); }}, 1000);
+    flash(btn, '✓ 已下载');
+  }};
+}})();
+</script>
+</body></html>"""
 
 _TURN_TPL = """<div class="turn">
   <div class="turn-head">
@@ -981,11 +1073,24 @@ def generate_site(conversations: list[dict]) -> Path:
         via_label = "完整API" if via == "api" else "DOM(部分)"
 
         turns_html = "\n".join(_build_turn_html(t) for t in turns)
+        # 内嵌原始数据供导出按钮使用（纯文本，不含 HTML），并防止 </script> 注入
+        raw_payload = {
+            "meta": {
+                "id": cid, "title": title, "url": conv.get("url",""), "date": date,
+            },
+            "turns": [
+                {"role": t.get("role","model"), "text": t.get("text","")}
+                for t in turns
+            ],
+        }
+        raw_json = (json.dumps(raw_payload, ensure_ascii=False)
+                    .replace("</", "<\\/"))
         page = _CONV_TPL.format(
             title=_esc(title), url=conv.get("url",""),
             turns=len(turns), date=date,
             via_label=via_label,
             turns_html=turns_html,
+            raw_json=raw_json,
         )
         (SITE_DIR / "conversations" / f"{cid}.html").write_text(page, encoding="utf-8")
         (SITE_DIR / "data" / f"{cid}.json").write_text(
@@ -1098,15 +1203,63 @@ async def main():
 
     total = len(conv_list)
     limit = CONV_LIMIT if CONV_LIMIT > 0 else total
-    print(f"\n    ✓ 共发现 {total} 个对话，捕获全部 {limit} 个:")
-    for i, c in enumerate(conv_list[:limit], 1):
-        print(f"      {i}. {c['title'][:55]}")
+    print(f"\n    ✓ 共发现 {total} 个对话")
 
-    # 4. 逐个捕获
-    print(f"\n[4] 开始全量捕获（共 {limit} 个对话）...（侧边栏顺序 = 最新在前）")
-    conversations = []
-    for i, info in enumerate(conv_list[:limit], 1):
-        print(f"\n  ── [{i}/{limit}] {info['title'][:55]}")
+    # 4. 增量决策：基于上次 _all.json 的对话 ID + 侧边栏位置
+    #    规则：
+    #      - 不在历史记录里的 → 新对话，必抓
+    #      - 当前最新 N 个 → 必抓（可能是当前正在聊的会话）
+    #      - 在侧边栏向上跳了 ≥ JUMP 位 → 有新消息，必抓
+    #      - 其他 → 直接复用上次数据
+    #    若 _all.json 不存在或读取失败 → 自动退回全量
+    old_all_path = SITE_DIR / "data" / "_all.json"
+    old_by_id: dict[str, dict] = {}
+    old_position: dict[str, int] = {}
+    if old_all_path.exists():
+        try:
+            old_arr = json.loads(old_all_path.read_text(encoding="utf-8"))
+            for i_old, c in enumerate(old_arr):
+                cid = c.get("id")
+                if cid:
+                    old_by_id[cid]      = c
+                    old_position[cid]   = i_old
+            print(f"    [增量] 加载历史 {len(old_by_id)} 个对话")
+        except Exception as e:
+            print(f"    [增量] 历史 _all.json 读取失败（{e}），回退全量")
+
+    FORCE_TOP_N    = 5   # 永远重抓最新的 N 个（可能是当前正在聊的）
+    POSITION_JUMP  = 5   # 在侧边栏上跳 ≥ N 位 = 有新消息
+
+    to_capture: list[tuple[dict, str]] = []   # (info, reason)
+    carry_over_ids: set[str] = set()
+
+    for i, info in enumerate(conv_list[:limit]):
+        cid = info["id"]
+        if cid not in old_by_id:
+            to_capture.append((info, "new"))
+        elif i < FORCE_TOP_N:
+            to_capture.append((info, "top"))
+        elif old_position.get(cid, 10**9) - i >= POSITION_JUMP:
+            to_capture.append((info, "moved"))
+        else:
+            carry_over_ids.add(cid)
+
+    n_capture = len(to_capture)
+    n_carry   = len(carry_over_ids)
+    n_new     = sum(1 for _, r in to_capture if r == "new")
+    n_moved   = sum(1 for _, r in to_capture if r == "moved")
+    n_top     = sum(1 for _, r in to_capture if r == "top")
+    print(f"    [增量] 需抓取 {n_capture} 个 (新 {n_new} / 移动 {n_moved} / 头部 {n_top})")
+    print(f"    [增量] 复用 {n_carry} 个")
+    if n_capture <= 30:
+        for info, reason in to_capture:
+            print(f"      · [{reason}] {info['title'][:55]}")
+
+    # 4.1 逐个抓取需要更新的对话
+    print(f"\n[4] 开始增量捕获（{n_capture} 个）...")
+    new_captured: dict[str, dict] = {}
+    for j, (info, reason) in enumerate(to_capture, 1):
+        print(f"\n  ── [{j}/{n_capture}] ({reason}) {info['title'][:50]}")
         try:
             data = await capture_conversation(
                 conv_id=info["id"],
@@ -1118,13 +1271,26 @@ async def main():
                 cdp=cdp,
                 debug=True,
             )
-            conversations.append(data)
+            new_captured[info["id"]] = data
         except Exception as e:
             import traceback
             print(f"    [错误] {e}")
             traceback.print_exc()
 
     await cdp.close()
+
+    # 4.2 按当前侧边栏顺序合并：优先用本轮抓到的，否则复用历史
+    conversations = []
+    for info in conv_list[:limit]:
+        cid = info["id"]
+        if cid in new_captured:
+            conversations.append(new_captured[cid])
+        elif cid in old_by_id:
+            c = dict(old_by_id[cid])
+            # 标题以最新侧边栏为准（用户可能改名）
+            if info.get("title"):
+                c["title"] = info["title"]
+            conversations.append(c)
 
     if not conversations:
         print("\n[!] 没有成功捕获任何对话")
